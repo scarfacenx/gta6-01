@@ -1,79 +1,223 @@
-// The screenshot scenes behind ?shot=start|play|end. Each one plays the real rules forward from a
-// fresh world for a fixed number of steps, steered by a simple autopilot (look ahead each way the
-// paddle could move, keep clear of blocks, chase the lowest coin when that is safe), so the frame
-// is what a short game really looks like and the same seed always gives the same frame.
-import { FIELD, PLAYER, STEP } from './config.js';
-import { EVENT_OVER, KIND_BLOCK } from './world.js';
-import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+// The screenshot scenes behind ?shot=start|chase|drive|mission. Each one
+// plays the real rules forward from a fresh world for a fixed number of
+// steps, steered by a simple autopilot, so the frame is what real play
+// looks like and the same seed always gives the same frame.
+import { STEP } from './config.js';
+import { isRoad, nearestRoad } from './city.js';
+import { makeCar, spawnCopCar, spawnTrafficCar, updateWorld } from './entities.js';
+import { startMission } from './missions.js';
 
-const START_SECONDS = 5;
-const PLAY_SECONDS = 26;
-const END_LIMIT_SECONDS = 600;
-/**
- * How far ahead, in seconds, the autopilot checks each way it could move: the play scene's pilot
- * looks well ahead and keeps all its lives; the end scene's looks only a moment ahead, so it is
- * caught out once the blocks speed up, as a hurried player is.
- */
-const HORIZON_PLAY = 0.7;
-const HORIZON_END = 0.25;
-const SAMPLE = 1 / 30;
-const DIRECTIONS = [0, -1, 1];
-/** Extra room, each side, it keeps between the paddle and a block. */
-const MARGIN = 10;
+const SAMPLE = STEP;
 
-/** Seconds until moving in `direction` (-1, 0, 1) runs the paddle into a block; Infinity when it never does. */
-function timeToHit(state, direction, horizon) {
-  const player = state.player;
-  for (let t = SAMPLE; t <= horizon; t += SAMPLE) {
-    const x = Math.min(FIELD.width - player.width, Math.max(0, player.x + direction * PLAYER.speed * t));
-    for (let index = 0; index < state.items.length; index += 1) {
-      const item = state.items[index];
-      if (!item.active || item.kind !== KIND_BLOCK) continue;
-      const y = item.y + item.speed * t;
-      if (y + item.height > player.y && y < player.y + player.height && item.x < x + player.width + MARGIN && item.x + item.width > x - MARGIN) return t;
-    }
-  }
-  return Infinity;
+function angleDiff(a, b) {
+  let d = b - a;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return d;
 }
 
-/** Of the safe ways to move, the one toward the lowest coin (or the centre); else the one that is hit last. */
-function autopilot(state, horizon) {
-  const player = state.player;
-  let coin = null;
-  for (let index = 0; index < state.items.length; index += 1) {
-    const item = state.items[index];
-    if (item.active && item.kind !== KIND_BLOCK && (coin === null || item.y > coin.y)) coin = item;
-  }
-  const target = coin === null ? FIELD.width / 2 : coin.x + coin.width / 2;
-  const centre = player.x + player.width / 2;
-  const wanted = target > centre + 8 ? 1 : target < centre - 8 ? -1 : 0;
-  let best = wanted;
-  let bestTime = timeToHit(state, wanted, horizon);
-  for (let index = 0; index < DIRECTIONS.length && bestTime !== Infinity; index += 1) {
-    const time = timeToHit(state, DIRECTIONS[index], horizon);
-    if (time > bestTime) {
-      bestTime = time;
-      best = DIRECTIONS[index];
-    }
+// An input the autopilot can drive: the same shape createInput returns.
+function makeAutoInput() {
+  let mx = 0;
+  let my = 0;
+  const input = {
+    mouse: { x: 0, y: 0, down: false, clicked: false },
+    up: false, down: false, left: false, right: false, run: false, brake: false,
+    moveX() { return mx; },
+    moveY() { return my; },
+    takeActions() { return 0; },
+    takeClick() { return false; },
+    setMove(x, y) { mx = x; my = y; },
+  };
+  return input;
+}
+
+// The road centreline nearest the car on one axis — the autopilot commits
+// to a single road and follows it, so it never turns onto a crossing road
+// at an intersection and drives into a block.
+function nearestRoadOnAxis(state, axis) {
+  const roads = state.city.roads;
+  const v = axis === 'v' ? state.player.car.x : state.player.car.y;
+  let best = roads[0];
+  for (const c of roads) {
+    if (Math.abs(c - v) < Math.abs(best - v)) best = c;
   }
   return best;
 }
 
+// Drive along the road the car is on, steering back to its centreline.
+// If the car gets wedged (speed near zero for a while), back it out.
+function driveAutopilot(state, input) {
+  const car = state.player.car;
+  if (!car) return;
+  if (Math.abs(car.speed) < 25) input._stuck = (input._stuck || 0) + 1;
+  else input._stuck = 0;
+  if (input._stuck > 45 && !input._reverseT) input._reverseT = 40;
+  if (input._reverseT > 0) {
+    input._reverseT -= 1;
+    input.up = false;
+    input.down = true;
+    input.left = false;
+    input.right = false;
+    input.brake = false;
+    input.setMove(0, 0);
+    return;
+  }
+  if (!input._axis) input._axis = nearestRoad(car.x, car.y).axis;
+  const roadVal = nearestRoadOnAxis(state, input._axis);
+  let tx;
+  let ty;
+  if (input._axis === 'v') {
+    let dir = Math.sin(car.angle) >= 0 ? 1 : -1;
+    if (car.y > 2600) dir = -1;
+    if (car.y < 200) dir = 1;
+    tx = roadVal + dir * 32;
+    ty = car.y + dir * 360;
+  } else {
+    let dir = Math.cos(car.angle) >= 0 ? 1 : -1;
+    if (car.x > 3000) dir = -1;
+    if (car.x < 200) dir = 1;
+    tx = car.x + dir * 360;
+    ty = roadVal + dir * 32;
+  }
+  const want = Math.atan2(ty - car.y, tx - car.x);
+  const diff = angleDiff(car.angle, want);
+  input.up = true;
+  input.down = false;
+  input.left = diff < -0.07;
+  input.right = diff > 0.07;
+  // Off the road (a corner cut too wide), slow down so the car can steer
+  // back onto the asphalt instead of grinding along a building.
+  input.brake = (Math.abs(diff) > 1.1 && Math.abs(car.speed) > 320)
+    || (!isRoad(car.x, car.y) && Math.abs(car.speed) > 200);
+  input.setMove(0, 0);
+}
+
+// Walk at the nearest living thug and shoot at them.
+function fightAutopilot(state, input) {
+  let target = null;
+  let best = Infinity;
+  for (const thug of state.thugs) {
+    if (thug.state === 'down') continue;
+    const d = Math.hypot(thug.x - state.player.x, thug.y - state.player.y);
+    if (d < best) {
+      best = d;
+      target = thug;
+    }
+  }
+  if (!target) return null;
+  const p = state.player;
+  const dx = target.x - p.x;
+  const dy = target.y - p.y;
+  const len = Math.hypot(dx, dy) || 1;
+  if (best > 240) input.setMove(dx / len, dy / len);
+  else input.setMove(0, 0);
+  input.mouse.down = best < 420;
+  return { x: target.x, y: target.y };
+}
+
+function putPlayerInCar(state, x, y, angle, color, vclass, speed) {
+  const car = makeCar(x, y, angle, { color, kind: 'player', vclass }, state.random);
+  car.speed = speed;
+  state.cars.push(car);
+  state.player.inCar = true;
+  state.player.car = car;
+  state.player.x = car.x;
+  state.player.y = car.y;
+  return car;
+}
+
 /**
- * Set `world` to the named scene (start, play or end; any other name is start) and return the
- * screen to draw over it and the best score to show.
+ * Set the game to the named scene and return the screen to draw over it
+ * (plus an optional world point for the crosshair).
  */
-export function stageShot(name, world) {
-  world.reset();
-  if (name !== 'play' && name !== 'end') {
-    for (let index = 0; index < START_SECONDS / STEP; index += 1) world.step(STEP, 0, true);
-    return { screen: SCREEN_TITLE, best: 0 };
+export function stageShot(name, game) {
+  const state = game.state;
+  game._resetRun();
+
+  if (name === 'start') {
+    state.screen = 'title';
+    const dummy = makeAutoInput();
+    for (let i = 0; i < 300; i += 1) {
+      state.time += SAMPLE;
+      updateWorld(state, dummy, SAMPLE, { x: state.player.x, y: state.player.y }, true);
+    }
+    return { screen: 'title' };
   }
-  const limit = name === 'end' ? END_LIMIT_SECONDS : PLAY_SECONDS;
-  const horizon = name === 'end' ? HORIZON_END : HORIZON_PLAY;
-  for (let index = 0; index < limit / STEP; index += 1) {
-    if (world.step(STEP, autopilot(world.state, horizon), false) & EVENT_OVER) break;
+
+  if (name === 'chase') {
+    state.screen = 'play';
+    const car = putPlayerInCar(state, 1632, 2300, -Math.PI / 2, '#d83a2e', 'coupe', 430);
+    startMission(state, 1);
+    state.mission.step = 2;
+    state.passenger = true;
+    state.wanted = 3;
+    state.lastCrimeAt = state.time;
+    spawnCopCar(state);
+    spawnCopCar(state);
+    spawnCopCar(state);
+    spawnTrafficCar(state);
+    spawnTrafficCar(state);
+    const input = makeAutoInput();
+    for (let i = 0; i < 420; i += 1) {
+      driveAutopilot(state, input);
+      if (car.hp < 70) car.hp = car.maxHp;
+      game.update(input, SAMPLE, { x: state.player.x, y: state.player.y });
+      if (state.screen !== 'play') break;
+    }
+    return { screen: 'play' };
   }
-  const over = world.state.lives === 0;
-  return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score };
+
+  if (name === 'drive') {
+    state.screen = 'play';
+    // One long straight run south down the 1200 avenue — no U-turn, so the
+    // car is still mid-drive on the road when the frame is taken.
+    const car = putPlayerInCar(state, 1232, 500, Math.PI / 2, '#2e7fd8', 'sedan', 300);
+    startMission(state, 0);
+    state.mission.step = 1;
+    spawnTrafficCar(state);
+    spawnTrafficCar(state);
+    const input = makeAutoInput();
+    for (let i = 0; i < 240; i += 1) {
+      driveAutopilot(state, input);
+      if (car.hp < 70) car.hp = car.maxHp;
+      game.update(input, SAMPLE, { x: state.player.x, y: state.player.y });
+      if (state.screen !== 'play') break;
+    }
+    return { screen: 'play' };
+  }
+
+  // mission: a firefight at the docks.
+  state.screen = 'play';
+  startMission(state, 2);
+  state.mission.step = 1;
+  const dock = state.city.landmarks.docks.marker;
+  state.player.x = dock.x - 260;
+  state.player.y = dock.y + 120;
+  state.player.hasPistol = true;
+  state.player.ammo = 120;
+  state.player.weapon = 'pistol';
+  const input = makeAutoInput();
+  let aim = { x: dock.x, y: dock.y };
+  // Fewer steps than the drive scenes: the frame should catch the fight
+  // still in progress — thugs shooting, muzzle flashes — not the aftermath.
+  // Short enough that the player is still west of the docks, so the camera
+  // is not clamped hard against the map's east edge.
+  for (let i = 0; i < 150; i += 1) {
+    const next = fightAutopilot(state, input);
+    if (next) {
+      aim = next;
+    } else {
+      // No thug left standing: walk to the marker to grab the package.
+      const dx = dock.x - state.player.x;
+      const dy = dock.y - state.player.y;
+      const len = Math.hypot(dx, dy) || 1;
+      input.setMove(dx / len, dy / len);
+      input.mouse.down = false;
+    }
+    if (state.player.hp < 60) state.player.hp = 100;
+    game.update(input, SAMPLE, aim);
+    if (state.screen !== 'play') break;
+  }
+  return { screen: 'play', aimWorld: aim };
 }

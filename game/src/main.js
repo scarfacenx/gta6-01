@@ -1,14 +1,17 @@
-// Boot and the one loop: input is read every frame, the world advances in fixed 1/60 s steps
-// (several in a slow frame, none in a fast one), and the renderer paints what is there. The game
-// moves between four screens: title, play, paused and game over.
+// Boot and the one loop: input is read every frame, the world advances in
+// fixed 1/60 s steps (several in a slow frame, none in a fast one), and the
+// renderer and HUD paint what is there. The game moves between its screens:
+// title, play, pause, wasted, busted, mission failed, mission complete, and
+// the ending.
 //
-// ?seed=N fixes the falling pattern. ?shot=start|play|end (with &seed=N) stages that scene
-// instead of running the loop, paints it twice and sets window.__shotReady for a screenshot.
-import { BEST_KEY, LIVES, STEP } from './config.js';
-import { createRandom } from './random.js';
-import { createWorld, EVENT_HIT, EVENT_OVER } from './world.js';
-import { ACTION_CONFIRM, ACTION_PAUSE, createInput } from './input.js';
-import { createRenderer, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+// ?seed=N fixes the city. ?shot=start|chase|drive|mission (with &seed=N)
+// stages that scene instead of running the loop, paints it, and sets
+// window.__shotReady for a screenshot.
+import { STEP } from './config.js';
+import { createInput } from './input.js';
+import { createGame } from './game.js';
+import { createRenderer } from './render.js';
+import { createHud } from './hud.js';
 import { stageShot } from './shots.js';
 
 /** The longest frame the loop catches up on; a longer stall (a hidden tab) is dropped, not replayed. */
@@ -21,112 +24,102 @@ const seed = Number.isInteger(seedParam) ? seedParam : Math.floor(Math.random() 
 
 const canvas = document.getElementById('game');
 const status = document.getElementById('status');
-const world = createWorld(createRandom(seed));
+const game = createGame(seed);
 const renderer = createRenderer(canvas);
+const hud = createHud(canvas);
+// Test hook: lets automated play-tests read the live state.
+window.__game = game;
 
-function readBest() {
-  try {
-    return Number.parseInt(window.localStorage.getItem(BEST_KEY) ?? '0', 10) || 0;
-  } catch {
-    return 0;
-  }
-}
-
-function saveBest(value) {
-  try {
-    window.localStorage.setItem(BEST_KEY, String(value));
-  } catch {
-    // Storage can be off (private windows): the best score then lasts this visit only.
-  }
+function announce(message) {
+  status.textContent = message;
+  game.state.announced = message;
 }
 
 function runShot(name) {
-  const scene = stageShot(name, world);
-  let painted = 0;
-  function paint() {
-    renderer.draw(world.state, scene.screen, scene.best);
-    painted += 1;
-    if (painted < 2) requestAnimationFrame(paint);
-    else window.__shotReady = true;
+  const scene = stageShot(name, game);
+  const state = game.state;
+  // Paint twice: the first paint settles the camera, the second is the frame.
+  renderer.draw(state, scene.screen);
+  hud.draw(state, scene.screen, { mouse: { x: 0, y: 0, down: false } }, state.uiButtons);
+  if (scene.aimWorld) {
+    const ratio = window.devicePixelRatio || 1;
+    const view = renderer.view;
+    const mx = (scene.aimWorld.x - view.x) * view.scale / ratio;
+    const my = (scene.aimWorld.y - view.y) * view.scale / ratio;
+    renderer.draw(state, scene.screen);
+    hud.draw(state, scene.screen, { mouse: { x: mx, y: my, down: true } }, state.uiButtons);
   }
-  requestAnimationFrame(paint);
+  window.__shotReady = true;
+  announce(`Screenshot scene ${name} ready.`);
 }
 
 function runGame() {
   const input = createInput(canvas);
-  let screen = SCREEN_TITLE;
-  let best = readBest();
   let accumulator = 0;
   let last = performance.now();
+  let lastScreen = game.state.screen;
 
-  // Screen readers (and anyone watching the page's text) hear the screen changes and each hit.
-  function announce(message) {
-    status.textContent = message;
-  }
-
-  function startGame() {
-    world.reset();
-    accumulator = 0;
-    screen = SCREEN_PLAY;
-    announce(`Playing. ${LIVES} lives.`);
-  }
-
-  function endGame() {
-    screen = SCREEN_OVER;
-    if (world.state.score > best) {
-      best = world.state.score;
-      saveBest(best);
+  function step(now) {
+    const state = game.state;
+    // The mouse aims in world coordinates: convert the cursor through the camera.
+    const aim = renderer.screenToWorld(input.mouse.x, input.mouse.y);
+    game.update(input, STEP, aim);
+    if (state.screen !== lastScreen) {
+      lastScreen = state.screen;
+      const names = {
+        title: 'Coral Heat. Press Enter or click New Game.',
+        play: 'Playing.',
+        pause: 'Paused.',
+        wasted: 'Wasted.',
+        busted: 'Busted.',
+        failed: 'Mission failed.',
+        complete: 'Mission complete.',
+        ending: 'King of Coral Bay.',
+      };
+      announce(names[state.screen] || 'Playing.');
     }
-    announce(`Game over. Score ${world.state.score}. Best ${best}.`);
-  }
-
-  function handleActions() {
-    const actions = input.takeActions();
-    if (actions & ACTION_CONFIRM && (screen === SCREEN_TITLE || screen === SCREEN_OVER)) startGame();
-    else if (actions & ACTION_PAUSE && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
-      announce('Paused.');
-    } else if (actions & (ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN_PAUSED) {
-      screen = SCREEN_PLAY;
-      announce('Playing.');
-    }
-  }
-
-  function step() {
-    if (screen === SCREEN_TITLE) {
-      world.step(STEP, 0, true);
-      return;
-    }
-    const events = world.step(STEP, input.direction(), false);
-    if (events & EVENT_OVER) endGame();
-    else if (events & EVENT_HIT) announce(world.state.lives === 1 ? 'Hit. 1 life left.' : `Hit. ${world.state.lives} lives left.`);
   }
 
   function frame(now) {
     requestAnimationFrame(frame);
     accumulator += Math.min((now - last) / 1000, MAX_FRAME);
     last = now;
-    handleActions();
-    if (screen === SCREEN_TITLE || screen === SCREEN_PLAY) {
-      while (accumulator >= STEP && (screen === SCREEN_TITLE || screen === SCREEN_PLAY)) {
-        step();
+    const state = game.state;
+    if (state.screen === 'play') {
+      while (accumulator >= STEP) {
+        step(now);
         accumulator -= STEP;
+        if (state.screen !== 'play') {
+          accumulator = 0;
+          break;
+        }
       }
     } else {
-      accumulator = 0;
+      // Menus still tick (the title's city keeps moving) but in big steps.
+      while (accumulator >= STEP) {
+        const aim = renderer.screenToWorld(input.mouse.x, input.mouse.y);
+        game.update(input, STEP, aim);
+        accumulator -= STEP;
+        if (state.screen === 'play') {
+          accumulator = 0;
+          break;
+        }
+      }
     }
-    renderer.draw(world.state, screen, best);
+    renderer.draw(state, state.screen);
+    hud.draw(state, state.screen, input, state.uiButtons);
   }
 
-  // Leaving the tab pauses a running game rather than letting blocks fall unseen.
+  // Leaving the tab pauses a running game rather than letting the cops catch
+  // the player unseen.
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
+    if (document.hidden && game.state.screen === 'play') {
+      game.state.screen = 'pause';
       announce('Paused.');
     }
   });
 
-  announce('Block Dodger. Press Space or click to start.');
+  announce('Coral Heat. Press Enter or click New Game.');
   requestAnimationFrame(frame);
 }
 

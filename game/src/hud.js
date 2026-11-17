@@ -306,6 +306,10 @@ export function createHud(canvas) {
   function draw(state, screen, input, buttons) {
     const ratio = window.devicePixelRatio || 1;
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    // The canvas keeps every frame ever painted on it: without a clear,
+    // the title screen's text and buttons ghost through the whole play
+    // session underneath the HUD panels.
+    ctx.clearRect(0, 0, canvas.width / ratio, canvas.height / ratio);
     if (screen === 'title') {
       drawTitle(state, buttons);
       return;

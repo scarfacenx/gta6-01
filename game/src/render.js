@@ -501,44 +501,119 @@ export function createRenderer(canvas) {
     return { group, body, bodyMat, barL, barR };
   }
 
-  function buildPersonMesh(shirtColor, opts) {
+  // --- Humanoids: one CJ-style rig for everybody. ---
+  // GTA San Andreas reads because CJ is a person first: a head with hair
+  // and a face, a jacket over a tee, jeans, sneakers, and arms and legs
+  // that swing when he walks. The rig is still low-poly boxes on shared
+  // geometry/materials — no shadows, no textures — so it costs draw calls
+  // only. Local +X is forward (rotation.y = -angle, same as the cars).
+  // Limbs hang from pivot groups at the joints, so the walk cycle is a
+  // rotation on each pivot, never a new mesh.
+  const SKINS = ['#e8b98a', '#c98d5f', '#8a5a3a', '#d9a06b'];
+  const PANTS = ['#2f3f66', '#3a3f45', '#5a4a3a', '#2a4a3a'];
+  function hashStr(s) {
+    let h = 0;
+    for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return h;
+  }
+  // Danny: teal jacket open over a white tee, blue jeans, white sneakers.
+  // Cop: navy uniform, cap with brim, badge. Thug: dark hoodie, bandana.
+  const OUTFITS = {
+    player: { skin: '#c98d5f', shirt: '#1f8a70', tee: '#f2f2f2', pants: '#2f3f66', shoes: '#f2f2f2', hair: '#1c1410', hat: null, gun: true },
+    cop: { skin: '#d9a06b', shirt: '#2a4a7a', tee: null, pants: '#1e2a38', shoes: '#14161a', hair: '#2a2018', hat: 'police', gun: true },
+    thug: { skin: '#b57a4e', shirt: '#7a2a2a', tee: null, pants: '#33333a', shoes: '#22262b', hair: '#14100c', hat: 'bandana', gun: true },
+  };
+  function pedOutfit(shirtColor) {
+    const h = hashStr(shirtColor || '#c8a24a');
+    return {
+      skin: SKINS[h % SKINS.length],
+      shirt: shirtColor || '#c8a24a',
+      tee: null,
+      pants: PANTS[(h >> 3) % PANTS.length],
+      shoes: (h >> 5) % 2 ? '#f2f2f2' : '#22262b',
+      hair: '#241a12',
+      hat: null,
+      gun: false,
+    };
+  }
+
+  function box(w, h, d, mat, x, y, z, parent) {
+    const m = new THREE.Mesh(unitBox, mat);
+    m.scale.set(w, h, d);
+    m.position.set(x, y, z);
+    parent.add(m);
+    return m;
+  }
+
+  function buildPersonMesh(outfit) {
     const group = new THREE.Group();
-    const shirtMat = lambert(shirtColor);
-    const body = new THREE.Mesh(unitBox, shirtMat);
-    body.scale.set(9, 15, 7);
-    body.position.y = 15;
-    group.add(body);
-    const head = new THREE.Mesh(headGeo, skinMat);
-    head.scale.set(5.2, 5.2, 5.2);
-    head.position.y = 26;
-    group.add(head);
-    for (const z of [5, -5]) {
-      const arm = new THREE.Mesh(unitBox, shirtMat);
-      arm.scale.set(3, 11, 3);
-      arm.position.set(0, 15, z);
-      group.add(arm);
+    const skinMat = lambert(outfit.skin);
+    const shirtMat = lambert(outfit.shirt);
+    const pantsMat = lambert(outfit.pants);
+    const shoesMat = lambert(outfit.shoes);
+    const hairMat = lambert(outfit.hair);
+    const darkMat2 = lambert('#14161a');
+    const teeMat = outfit.tee ? lambert(outfit.tee) : null;
+
+    // Legs: pivot at the hip (y 18), jeans down to the ankle, shoe
+    // pointing forward. rotation.z swings the whole leg forward/back.
+    function buildLeg(z) {
+      const pivot = new THREE.Group();
+      pivot.position.set(0, 18, z);
+      box(5, 15, 4.5, pantsMat, 0, -7.5, 0, pivot);
+      box(6.5, 2.5, 3.5, shoesMat, 1, -15.8, 0, pivot);
+      group.add(pivot);
+      return pivot;
     }
-    for (const z of [4, -4]) {
-      const leg = new THREE.Mesh(unitBox, darkMat);
-      leg.scale.set(4, 9, 3);
-      leg.position.set(0, 4.5, z);
-      group.add(leg);
+    const legL = buildLeg(3.2);
+    const legR = buildLeg(-3.2);
+
+    // Upper body pivots at the hips: it leans forward on a run and
+    // breathes at idle. Torso is the jacket; the tee shows on the chest.
+    const upper = new THREE.Group();
+    upper.position.set(0, 18, 0);
+    group.add(upper);
+    box(13, 13, 8, shirtMat, 0, 6.5, 0, upper);
+    if (teeMat) box(1, 9, 6, teeMat, 6.6, 7, 0, upper);
+    if (outfit.hat === 'police') box(0.6, 2.5, 2.5, lambert('#e8b62a'), 6.6, 9, -2.5, upper);
+
+    // Arms: pivot at the shoulder, sleeve down to the wrist, skin hand.
+    // The pistol rides in the right hand, so it follows the arm.
+    function buildArm(z) {
+      const pivot = new THREE.Group();
+      pivot.position.set(0, 12, z);
+      box(3.5, 10, 3.5, shirtMat, 0, -5, 0, pivot);
+      box(3, 3.5, 3, skinMat, 0, -11.5, 0, pivot);
+      upper.add(pivot);
+      return pivot;
     }
-    let gun = null;
-    if (opts.gun) {
-      gun = new THREE.Mesh(unitBox, darkMat);
-      gun.scale.set(11, 2.5, 2.5);
-      gun.position.set(8, 16, 0);
-      group.add(gun);
-    }
-    if (opts.cap) {
-      const cap = new THREE.Mesh(unitBox, copDarkMat);
-      cap.scale.set(9, 3, 9);
-      cap.position.y = 30;
-      group.add(cap);
+    const armL = buildArm(7.8);
+    const armR = buildArm(-7.8);
+    const gun = new THREE.Group();
+    gun.position.set(2, -12.5, 0);
+    box(9, 2, 2, darkMat2, 3, 0, 0, gun);
+    box(2, 4.5, 2, darkMat2, -0.5, -2, 0, gun);
+    armR.add(gun);
+
+    // Neck, then the head: skin box, hair cap on top and at the back,
+    // one dark eye strip across the face, and a hat where the outfit
+    // calls for one.
+    box(3, 2.5, 3, skinMat, 0, 13.5, 0, upper);
+    const head = new THREE.Group();
+    head.position.set(0, 15, 0);
+    upper.add(head);
+    box(6, 6, 6, skinMat, 0, 3, 0, head);
+    box(6.5, 2, 6.5, hairMat, 0, 6.2, 0, head);
+    box(1.2, 4.5, 6, hairMat, -2.8, 3, 0, head);
+    box(0.6, 1.1, 3.4, darkMat2, 3.1, 3.5, 0, head);
+    if (outfit.hat === 'police') {
+      box(7, 1.8, 7, copDarkMat, 0, 6.5, 0, head);
+      box(4, 0.7, 5.5, darkMat2, 4.2, 5.9, 0, head);
+    } else if (outfit.hat === 'bandana') {
+      box(6.6, 1.4, 6.6, lambert('#c23a2e'), 0, 5.6, 0, head);
     }
     scene.add(group);
-    return { group, gun };
+    return { group, upper, legL, legR, armL, armR, gun };
   }
 
   function buildPickupMesh(kind) {
@@ -582,21 +657,89 @@ export function createRenderer(canvas) {
     }
   }
 
+  // Walk cycle state lives on the pool record (render-side only — the
+  // sim never sees it). Speed comes from position deltas, so it works
+  // for every kind of walker, and the stride phase advances by the
+  // distance actually travelled: a screenshot staged over 2.5 s of sim
+  // still catches its people mid-stride. A fresh record starts in the
+  // pose its motion state implies, so the first paint is already right.
   function syncPerson(obj, kind, time, phase) {
     let rec = personPool.get(obj);
     if (!rec) {
-      if (kind === 'player') rec = buildPersonMesh('#1f8a70', { gun: true });
-      else if (kind === 'cop') rec = buildPersonMesh('#2a4a7a', { gun: true, cap: true });
-      else if (kind === 'thug') rec = buildPersonMesh('#7a2a2a', { gun: true });
-      else rec = buildPersonMesh(obj.shirt || '#c8a24a', { gun: false });
+      const outfit = kind === 'player' ? OUTFITS.player
+        : kind === 'cop' ? OUTFITS.cop
+        : kind === 'thug' ? OUTFITS.thug
+        : pedOutfit(obj.shirt);
+      rec = buildPersonMesh(outfit);
+      rec.lastX = obj.x;
+      rec.lastY = obj.y;
+      rec.lastTime = time;
+      rec.phase = phase;
+      const moving = kind === 'player' ? !!obj.moving : obj.state !== 'down' && obj.state !== 'fare';
+      rec.amp = moving ? 1 : 0;
+      rec.aim = (kind === 'cop' || kind === 'thug' || (kind === 'player' && obj.weapon === 'pistol')) ? 1 : 0;
+      rec.punch = 0;
       personPool.set(obj, rec);
     }
     const down = obj.state === 'down' || obj.hp <= 0;
-    const bob = down ? 0 : Math.abs(Math.sin(time * 9 + phase)) * 1.6;
+    let dt = time - rec.lastTime;
+    if (dt < 0) dt = 0;
+    if (dt > 0.3) dt = 0.3;
+    const moved = Math.hypot(obj.x - rec.lastX, obj.y - rec.lastY);
+    const speed = dt > 0.001 ? Math.min(moved / dt, 420) : 0;
+    rec.lastX = obj.x;
+    rec.lastY = obj.y;
+    rec.lastTime = time;
+    rec.phase += moved * 0.055;
+    const ampTarget = down ? 0 : Math.min(1, speed / 140);
+    rec.amp += (ampTarget - rec.amp) * Math.min(1, dt * 8);
+    const armed = kind === 'cop' || kind === 'thug' || (kind === 'player' && obj.weapon === 'pistol');
+    const aimTarget = down ? 0 : (armed ? 1 : 0);
+    rec.aim += (aimTarget - rec.aim) * Math.min(1, dt * 7);
+    const punchTarget = kind === 'player' && obj.punchAnim > 0 ? 1 : 0;
+    rec.punch += (punchTarget - rec.punch) * Math.min(1, dt * 22);
+
+    const run = Math.min(1, speed / 220);
+    const swing = (0.5 + 0.25 * run) * Math.sin(rec.phase) * rec.amp;
+    // A shooting stance: feet apart, both arms up on the gun.
+    const stance = 0.22 * rec.aim;
+    rec.legL.rotation.z = swing + stance;
+    rec.legR.rotation.z = -swing - stance;
+    const armSwing = swing * 0.8;
+    const idleSway = Math.sin(time * 1.3 + phase) * 0.03 * (1 - rec.amp);
+    let armLz = -armSwing + idleSway;
+    let armRz = armSwing + idleSway;
+    let armLy = 0;
+    let armRy = 0;
+    if (rec.aim > 0.01) {
+      // Right arm straight out on the gun; left arm comes across to
+      // support it. rotation.y turns the forward arm toward the middle.
+      armRz = armRz + (1.45 - armRz) * rec.aim;
+      armLz = armLz + (1.15 - armLz) * rec.aim;
+      armLy = 0.35 * rec.aim;
+      armRy = 0;
+    }
+    if (rec.punch > 0.01 && obj.punchAnim > 0) {
+      // A jab: the right arm snaps forward and back over the punch.
+      const prog = 1 - obj.punchAnim / 0.18;
+      armRz = armRz + (1.35 * Math.sin(prog * Math.PI) - armRz) * rec.punch;
+      armRy = 0;
+    }
+    if (kind === 'ped' && obj.state === 'fare') {
+      // Waiting for a cab, waving it down.
+      armRz = 2.5 + Math.sin(time * 5) * 0.3;
+      armRy = 0;
+    }
+    rec.armL.rotation.set(0, armLy, armLz);
+    rec.armR.rotation.set(0, armRy, armRz);
+    // Lean into a run; breathe at idle.
+    rec.upper.rotation.z = (0.03 + 0.09 * run) * rec.amp;
+    rec.upper.rotation.x = Math.sin(time * 2.2) * 0.012 * (1 - rec.amp);
+    const bob = Math.abs(Math.sin(rec.phase)) * 1.6 * rec.amp;
     rec.group.position.set(obj.x, down ? 3 : bob, obj.y);
     rec.group.rotation.set(0, -obj.angle, down ? Math.PI / 2 : 0);
     rec.group.visible = true;
-    if (rec.gun) rec.gun.visible = kind === 'player' ? obj.weapon === 'pistol' : !down;
+    if (rec.gun) rec.gun.visible = kind !== 'player' || obj.weapon === 'pistol';
     return rec;
   }
 
@@ -787,7 +930,7 @@ export function createRenderer(canvas) {
       const heading = inCar ? p.car.angle : p.angle;
       const yaw = cam ? cam.yaw : 0;
       const pitch = cam ? cam.pitch : CAM3D.pitch;
-      const dist = inCar ? CAM3D.carDist : CAM3D.footDist;
+      const dist = cam && cam.dist ? cam.dist : (inCar ? CAM3D.carDist : CAM3D.footDist);
       const flat = dist * Math.cos(pitch);
       const height = dist * Math.sin(pitch);
       desired = new THREE.Vector3(

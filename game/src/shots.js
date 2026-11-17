@@ -224,7 +224,7 @@ export function stageShot(name, game) {
   // still in progress — thugs shooting, muzzle flashes — not the aftermath.
   // Short enough that the player is still west of the docks, so the camera
   // is not clamped hard against the map's east edge.
-  for (let i = 0; i < 150; i += 1) {
+  for (let i = 0; i < 90; i += 1) {
     const next = fightAutopilot(state, input);
     if (next) {
       aim = next;
@@ -240,9 +240,14 @@ export function stageShot(name, game) {
     game.update(input, SAMPLE, aim);
     if (state.screen !== 'play') break;
   }
+  // The staging is a real firefight, so the player usually took a hit
+  // moments before the frame — clear the hurt vignette, or the whole
+  // shot comes out red. (Staging only; live play is untouched.)
+  state.player.lastHurt = -100;
   // Camera behind the player, looking at the thug he is shooting at,
-  // angled a little to the side so the player reads in frame.
+  // angled a little to the side so the player reads in frame. Closer
+  // than the normal foot camera: this shot showcases the character.
   const dx = aim.x - state.player.x;
   const dy = aim.y - state.player.y;
-  return { screen: 'play', aimWorld: aim, camYaw: Math.atan2(-dx, -dy) + 0.4 };
+  return { screen: 'play', aimWorld: aim, camYaw: Math.atan2(-dx, -dy) + 0.4, camDist: 175 };
 }

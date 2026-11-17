@@ -47,7 +47,7 @@ function announce(message) {
 function runShot(name) {
   const scene = stageShot(name, game);
   const state = game.state;
-  const cam = scene.camYaw === undefined ? null : { yaw: scene.camYaw, pitch: CAM3D.pitch };
+  const cam = scene.camYaw === undefined ? null : { yaw: scene.camYaw, pitch: CAM3D.pitch, dist: scene.camDist };
   if (scene.aimWorld) state.player.muzzle = 0.06;
   // Paint twice: the first paint settles the camera, the second is the frame.
   renderer.draw(state, scene.screen, cam);

@@ -3,6 +3,19 @@
 export const STEP = 1 / 60;
 export const SAVE_KEY = 'coral-heat-save-v1';
 
+// Third-person camera: how far and how high it sits, how steep it looks
+// down, and how long the mouse must be idle before it swings back behind
+// the player or the car.
+export const CAM3D = {
+  fov: 62,
+  footDist: 230,
+  carDist: 340,
+  pitch: 0.42,
+  pitchMin: 0.08,
+  pitchMax: 1.0,
+  followDelay: 2.5,
+};
+
 export const WORLD = {
   size: 3200,
   roadEvery: 400,

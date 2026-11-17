@@ -12,6 +12,15 @@ const MONO = 'ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace';
 
 export function createHud(canvas) {
   const ctx = canvas.getContext('2d');
+  // This canvas is a separate overlay over the WebGL view: size it to the
+  // window (CSS pixels times device pixel ratio) like the renderer does.
+  function resize() {
+    const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+    canvas.width = Math.floor(window.innerWidth * ratio);
+    canvas.height = Math.floor(window.innerHeight * ratio);
+  }
+  window.addEventListener('resize', resize);
+  resize();
   const fonts = new Map();
   function font(size, weight, mono) {
     const key = `${weight || 400}:${size}:${mono ? 'm' : 's'}`;
@@ -166,7 +175,8 @@ export function createHud(canvas) {
     }
   }
 
-  function drawHints(state, input) {
+  function drawHints(state, screen, input) {
+    const w = canvas.width / (window.devicePixelRatio || 1);
     const h = canvas.height / (window.devicePixelRatio || 1);
     const p = state.player;
     let hint = '';
@@ -186,19 +196,20 @@ export function createHud(canvas) {
         ctx.fill();
         text('CAR', 154, h - 44, 11, 'rgba(255,255,255,0.7)', 'left', 700, true);
       }
-      hint = 'W/S drive · A/D steer · SPACE handbrake · E exit car';
+      hint = 'W/S drive · A/D steer · SPACE handbrake · E exit car · Mouse look around';
       if (state.nearFare) hint = 'Taxi fare nearby — drive close to pick them up';
       if (state.faresRiding) hint = `Fare riding — follow the green marker ($${state.faresRiding.pay})`;
     } else if (state.nearCar) {
       hint = 'E — steal this car';
     } else {
-      hint = 'WASD move · SHIFT run · E enter car · LMB punch / shoot · 1/2 weapon';
+      hint = 'WASD move · SHIFT run · Mouse look · LMB punch / shoot · 1/2 weapon';
     }
     text(hint, 28, h - 28, 14, 'rgba(255,255,255,0.85)', 'left', 600);
-    if (!p.inCar && p.weapon === 'pistol') {
-      // Crosshair at the mouse.
-      const mx = input.mouse.x;
-      const my = input.mouse.y;
+    if (screen === 'play' && !p.inCar && p.weapon === 'pistol') {
+      // Third-person aim: the crosshair sits at the centre of the screen,
+      // and the mouse aims through it.
+      const mx = w / 2;
+      const my = h / 2;
       ctx.strokeStyle = 'rgba(255,255,255,0.9)';
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -233,11 +244,11 @@ export function createHud(canvas) {
   function drawTitle(state, buttons) {
     const w = canvas.width / (window.devicePixelRatio || 1);
     const h = canvas.height / (window.devicePixelRatio || 1);
-    ctx.fillStyle = 'rgba(8, 10, 16, 0.72)';
+    ctx.fillStyle = 'rgba(8, 10, 16, 0.55)';
     ctx.fillRect(0, 0, w, h);
     const cx = w / 2;
     text('CORAL HEAT', cx, 168, 84, '#ffb400', 'center', 900);
-    text('An original open-world crime story — Coral Bay', cx, 208, 20, '#fff', 'center', 500);
+    text('An original open-world crime story in third-person 3D — Coral Bay', cx, 208, 20, '#fff', 'center', 500);
     text('Danny Cole is back, and Vera Kline owns his debt. Steal cars, lose the cops,', cx, 250, 16, 'rgba(255,255,255,0.8)', 'center', 500);
     text('run five missions, and take back the city — one hot wheel at a time.', cx, 274, 16, 'rgba(255,255,255,0.8)', 'center', 500);
 
@@ -269,9 +280,9 @@ export function createHud(canvas) {
       panel(cx - 330, h - 268, 660, 200);
       text('HOW TO PLAY', cx, h - 236, 18, '#ffb400', 'center', 800);
       const lines = [
-        'WASD / arrows — move or drive · Mouse — aim · Left click — punch / shoot',
+        'WASD / arrows — move or drive · Mouse — look around (click to lock) · Left click — punch / shoot',
         'E — steal a car / get out · SHIFT — sprint · SPACE — handbrake',
-        '1 / 2 — fists / pistol · P — pause · M — mute',
+        '1 / 2 — fists / pistol · P — pause · M — mute · Camera swings back behind you when the mouse rests',
         'Crimes raise your wanted stars. Cops chase you — lose them to cool down.',
         'Follow the yellow marker. Green $ markers are taxi fares — drive up to earn.',
         'Finish all five missions to rule Coral Bay.',
@@ -301,7 +312,7 @@ export function createHud(canvas) {
     }
     drawTopHud(state);
     drawMinimap(state);
-    drawHints(state, input);
+    drawHints(state, screen, input);
     drawVignette(state);
     if (screen === 'pause') {
       drawPanelScreen('PAUSED', ['The city waits for no one — except right now.', `Cash $${state.cash.toLocaleString('en-US')} · Mission ${Math.min(state.missionIndex + 1, MISSIONS.length)} of ${MISSIONS.length}`], 'Press P or click to resume', '#fff');

@@ -122,8 +122,25 @@ export function explodeCar(state, car) {
   if (p.inCar && p.car === car) {
     p.inCar = false;
     p.car = null;
-    p.x = car.x + 40;
-    p.y = car.y;
+    // Eject beside the wreck, not through it: +40 east can land inside
+    // the very building the car just rammed, and a player inside a wall
+    // cannot move at all. Take the first clear spot around the car.
+    const spots = [[40, 0], [-40, 0], [0, 40], [0, -40], [0, 0]];
+    let placed = false;
+    for (const [ox, oy] of spots) {
+      const sx = car.x + ox;
+      const sy = car.y + oy;
+      if (!state.city.buildingHit(sx, sy, PLAYER.radius) && !isWater(sx, sy)) {
+        p.x = sx;
+        p.y = sy;
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      p.x = car.x;
+      p.y = car.y;
+    }
     hurtPlayer(state, 30);
   }
   // The blast hurts anyone standing close.
@@ -348,6 +365,22 @@ export function updateFares(state, dt) {
 
 function moveWithCollision(state, body, dx, dy, radius) {
   const { city } = state;
+  // Safety net: a body already inside a building would otherwise be stuck
+  // forever, because every step stays inside the walls and both axes refuse
+  // to move. Push it out through the nearest face first; a body outside
+  // the walls is untouched and moves exactly as before.
+  const inside = city.buildingHit(body.x, body.y, 0);
+  if (inside) {
+    const left = body.x - inside.x;
+    const right = inside.x + inside.w - body.x;
+    const top = body.y - inside.y;
+    const bottom = inside.y + inside.h - body.y;
+    const m = Math.min(left, right, top, bottom);
+    if (m === left) body.x = inside.x - radius;
+    else if (m === right) body.x = inside.x + inside.w + radius;
+    else if (m === top) body.y = inside.y - radius;
+    else body.y = inside.y + inside.h + radius;
+  }
   const nx = body.x + dx;
   if (!city.buildingHit(nx, body.y, radius) && !isWater(nx, body.y)) body.x = nx;
   const ny = body.y + dy;

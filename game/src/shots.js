@@ -134,6 +134,9 @@ function putPlayerInCar(state, x, y, angle, color, vclass, speed) {
 export function stageShot(name, game) {
   const state = game.state;
   game._resetRun();
+  // Mid-morning light: the screenshots should show the city, not the
+  // dawn. Live play still starts at 0.08 as the sim sets it.
+  state.timeOfDay = 0.3;
 
   if (name === 'start') {
     state.screen = 'title';
@@ -165,7 +168,9 @@ export function stageShot(name, game) {
       game.update(input, SAMPLE, { x: state.player.x, y: state.player.y });
       if (state.screen !== 'play') break;
     }
-    return { screen: 'play' };
+    // Camera behind the car, looking along its heading, angled a little
+    // to the side so the car's flank (not just its rear) reads in frame.
+    return { screen: 'play', camYaw: Math.atan2(-Math.cos(car.angle), -Math.sin(car.angle)) + 0.4 };
   }
 
   if (name === 'drive') {
@@ -184,30 +189,32 @@ export function stageShot(name, game) {
       game.update(input, SAMPLE, { x: state.player.x, y: state.player.y });
       if (state.screen !== 'play') break;
     }
-    return { screen: 'play' };
+    return { screen: 'play', camYaw: Math.atan2(-Math.cos(car.angle), -Math.sin(car.angle)) + 0.4 };
   }
 
-  // mission: a firefight at the docks. The fight is staged west of the
-  // docks building, where the camera can centre on the player: at the
-  // marker itself the camera clamps against the map's east edge and the
-  // player ends up hard right in the frame.
+  // mission: a firefight at the docks. The fight is staged on the 2400
+  // avenue, west of the docks, where the camera can centre on the player:
+  // at the marker itself the camera clamps against the map's east edge and
+  // the player ends up hard right in the frame. Everyone stands ON the
+  // road — in 3D a fighter teleported inside a building block is hidden
+  // behind its walls, so the spots must be open ground, not just near it.
   state.screen = 'play';
   startMission(state, 2);
   state.mission.step = 1;
   const dock = state.city.landmarks.docks.marker;
   const fightSpots = [
-    { x: 2400, y: 1400 },
-    { x: 2560, y: 1330 },
+    { x: 2420, y: 1380 },
     { x: 2440, y: 1560 },
-    { x: 2620, y: 1500 },
+    { x: 2380, y: 1320 },
+    { x: 2460, y: 1480 },
   ];
   state.thugs.forEach((thug, i) => {
     const spot = fightSpots[i % fightSpots.length];
     thug.x = spot.x;
     thug.y = spot.y;
   });
-  state.player.x = 2260;
-  state.player.y = 1480;
+  state.player.x = 2360;
+  state.player.y = 1520;
   state.player.hasPistol = true;
   state.player.ammo = 120;
   state.player.weapon = 'pistol';
@@ -233,5 +240,9 @@ export function stageShot(name, game) {
     game.update(input, SAMPLE, aim);
     if (state.screen !== 'play') break;
   }
-  return { screen: 'play', aimWorld: aim };
+  // Camera behind the player, looking at the thug he is shooting at,
+  // angled a little to the side so the player reads in frame.
+  const dx = aim.x - state.player.x;
+  const dy = aim.y - state.player.y;
+  return { screen: 'play', aimWorld: aim, camYaw: Math.atan2(-dx, -dy) + 0.4 };
 }

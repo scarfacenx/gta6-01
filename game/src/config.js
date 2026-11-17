@@ -60,6 +60,12 @@ export const WANTED = {
   decayEvery: 9,
   bustSeconds: 1.5,
   bustRange: 30,
+  // Gunfire heats up gradually: one pistol shot adds shotHeat, and a full
+  // heatPerStar buys one wanted star. A short burst earns a star or two;
+  // only sustained fire climbs to five.
+  shotHeat: 25,
+  heatPerStar: 100,
+  heatDecay: 15,
 };
 
 export const COUNTS = {

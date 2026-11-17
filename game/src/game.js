@@ -13,6 +13,7 @@ import {
   EVENT_EXPLOSION,
   EVENT_FARE,
   EVENT_PLAYER_HURT,
+  EVENT_SHOT,
   spawnCopCar,
   spawnFare,
   spawnFootCop,
@@ -59,6 +60,7 @@ export function createGame(seed) {
     timeOfDay: 0.08,
     cash: 150,
     wanted: 0,
+    heat: 0,
     lastCrimeAt: -1000,
     wantedTimer: 0,
     bustTimer: 0,
@@ -125,6 +127,7 @@ export function createGame(seed) {
     state.timeOfDay = 0.08;
     state.cash = 150;
     state.wanted = 0;
+    state.heat = 0;
     state.lastCrimeAt = -1000;
     state.wantedTimer = 0;
     state.bustTimer = 0;
@@ -261,7 +264,11 @@ export function createGame(seed) {
   }
 
   function updateWanted(dt) {
-    if (state.wanted === 0) return;
+    if (state.wanted === 0) {
+      // No heat: banked shot heat cools off instead of waiting for a star.
+      if (state.heat > 0) state.heat = Math.max(0, state.heat - WANTED.heatDecay * dt);
+      return;
+    }
     if (state.time - state.lastCrimeAt < WANTED.decayDelay) {
       state.wantedTimer = 0;
       return;
@@ -284,6 +291,7 @@ export function createGame(seed) {
     if (state.wantedTimer >= WANTED.decayEvery) {
       state.wantedTimer = 0;
       state.wanted -= 1;
+      state.heat = 0;
       if (state.wanted === 0) {
         state.cops.length = 0;
         state.cars = state.cars.filter((c) => c.kind !== 'cop');
@@ -335,6 +343,18 @@ export function createGame(seed) {
       state.wanted = Math.min(WANTED.max, state.wanted + 1);
       state.lastCrimeAt = state.time;
       state.wantedTimer = 0;
+    }
+    if (events & EVENT_SHOT) {
+      // Gunfire heats up a star at a time: four shots buy the first star,
+      // a full firefight climbs to three, and only sustained fire maxes out.
+      state.heat += WANTED.shotHeat;
+      state.lastCrimeAt = state.time;
+      state.wantedTimer = 0;
+      while (state.heat >= WANTED.heatPerStar && state.wanted < WANTED.max) {
+        state.heat -= WANTED.heatPerStar;
+        state.wanted += 1;
+      }
+      if (state.wanted >= WANTED.max) state.heat = 0;
     }
     if (events & EVENT_COP_KILLED) {
       state.wanted = Math.min(WANTED.max, state.wanted + 1);

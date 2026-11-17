@@ -187,13 +187,27 @@ export function stageShot(name, game) {
     return { screen: 'play' };
   }
 
-  // mission: a firefight at the docks.
+  // mission: a firefight at the docks. The fight is staged west of the
+  // docks building, where the camera can centre on the player: at the
+  // marker itself the camera clamps against the map's east edge and the
+  // player ends up hard right in the frame.
   state.screen = 'play';
   startMission(state, 2);
   state.mission.step = 1;
   const dock = state.city.landmarks.docks.marker;
-  state.player.x = dock.x - 260;
-  state.player.y = dock.y + 120;
+  const fightSpots = [
+    { x: 2400, y: 1400 },
+    { x: 2560, y: 1330 },
+    { x: 2440, y: 1560 },
+    { x: 2620, y: 1500 },
+  ];
+  state.thugs.forEach((thug, i) => {
+    const spot = fightSpots[i % fightSpots.length];
+    thug.x = spot.x;
+    thug.y = spot.y;
+  });
+  state.player.x = 2260;
+  state.player.y = 1480;
   state.player.hasPistol = true;
   state.player.ammo = 120;
   state.player.weapon = 'pistol';

@@ -14,6 +14,9 @@ export const EVENT_PICKUP = 16;
 export const EVENT_EXPLOSION = 32;
 export const EVENT_PED_DOWN = 64;
 export const EVENT_FARE = 128;
+// A pistol shot: heat, not an instant star — handled on its own so the
+// wanted level climbs a shot at a time instead of jumping to five.
+export const EVENT_SHOT = 256;
 
 function dist(ax, ay, bx, by) {
   return Math.hypot(ax - bx, ay - by);
@@ -447,7 +450,7 @@ function updatePlayerOnFoot(state, input, dt, aim) {
       life: 0.6, from: 'player', damage: PLAYER.pistolDamage,
     });
     addParticles(state, p.x + Math.cos(a) * 24, p.y + Math.sin(a) * 24, 3, '#ffd94d', 140, 0.15, 3);
-    return EVENT_CRIME;
+    return EVENT_SHOT;
   }
   return 0;
 }
